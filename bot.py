@@ -4,7 +4,6 @@ import sqlite3
 import db_manager
 import telebot.async_telebot as async_telebot
 from telebot import types
-from telebot.asyncio_storage import StateMemoryStorage
 from telebot.asyncio_handler_backends import State, StatesGroup
 import yaml
 
@@ -171,11 +170,24 @@ async def start_making_bet(call: types.CallbackQuery):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton('Назад', callback_data=f'select_predict:{predict_id}'))
     # TODO: обработка стейтов
+    await bot.set_state(user.id, MakingBetInfoState.diamonds, msg.chat.id)
     await bot.send_message(
         chat_id=msg.chat.id,
         text=yml_local['diamonds_count_select'],
-        parse_mode='html'
+        parse_mode='html',
+        reply_markup=markup
     )
+
+
+@bot.message_handler(state=MakingBetInfoState.diamonds)
+async def making_bet_diamonds(msg: types.Message):
+    await bot.delete_state(msg.from_user.id, msg.chat.id)
+    try:
+        int(msg.text)
+    except ValueError:
+        return
+    diamond_count = int(msg.text)
+
 
 
 async def main():
