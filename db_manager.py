@@ -52,6 +52,13 @@ async def connect_db(file: str, row_factory=None):
     return con, c
 
 
+async def execute(file: str, sql: str, args: tuple = None):
+    con, c = await connect_db(file)
+    c.execute(sql, args)
+    con.commit()
+    con.close()
+
+
 async def add_value(file: str, table: str, values: list):
     con, c = await connect_db(file)
     c.execute(f'INSERT INTO {table} VALUES (' + '?, '*(len(values)-1) + '?)', tuple(values))
@@ -84,3 +91,8 @@ async def get_all_values(file: str, table: str, primary_key: str, pkey_value: st
     con, c = await connect_db(file, row_factory=sqlite3.Row)
     c.execute(f'SELECT {value} FROM {table} WHERE {primary_key} = {pkey_value}')
     return c.fetchall()
+
+
+async def register_user(file: str, tg_id: int):
+    await add_column(file, 'PredictBets', f'\"{tg_id}\"')
+    await add_value(file, 'Users', [tg_id, 0])

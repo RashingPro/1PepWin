@@ -1,6 +1,8 @@
 import asyncio
 import sqlite3
 
+from telebot.asyncio_storage import StateMemoryStorage
+
 import db_manager
 import telebot.async_telebot as async_telebot
 from telebot import types
@@ -9,7 +11,7 @@ import yaml
 
 TOKEN = '6529609103:AAGsi-5Fjotc0sLmjhuUBlkHXRMZuw8Eii8'
 DB_FILE = 'main.db'
-bot = async_telebot.AsyncTeleBot(token=TOKEN)
+bot = async_telebot.AsyncTeleBot(token=TOKEN, state_storage=StateMemoryStorage())
 
 current_local = 'ru-RU'
 with open(f'./local/{current_local}.yml', encoding='utf-8') as f:
@@ -26,6 +28,11 @@ async def cmd_menu(call: types.Message | types.CallbackQuery):
         msg = call.message
         user = call.from_user
         await bot.delete_message(msg.chat.id, msg.message_id)
+
+    res = await db_manager.get_value(DB_FILE, 'Users', 'tg_id', user.id, '*')
+    if res is None:
+        await db_manager.register_user(DB_FILE, user.id)
+
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(yml_local['btn_events_for_bet'], callback_data='btn_events_for_bet'))
     markup.add(types.InlineKeyboardButton(yml_local['btn_deposit'], callback_data='btn_deposit'))
@@ -157,6 +164,8 @@ async def select_predict(call: types.CallbackQuery):
 
 
 class MakingBetInfoState(StatesGroup):
+    option = State()
+    predict_id = State()
     diamonds = State()
 
 
@@ -171,6 +180,8 @@ async def start_making_bet(call: types.CallbackQuery):
     markup.add(types.InlineKeyboardButton('Назад', callback_data=f'select_predict:{predict_id}'))
     # TODO: обработка стейтов
     await bot.set_state(user.id, MakingBetInfoState.diamonds, msg.chat.id)
+    await bot.current_states.set_data(msg.chat.id, user.id, 'option', option)
+    await bot.current_states.set_data(msg.chat.id, user.id, 'predict_id', predict_id)
     await bot.send_message(
         chat_id=msg.chat.id,
         text=yml_local['diamonds_count_select'],
@@ -181,16 +192,104 @@ async def start_making_bet(call: types.CallbackQuery):
 
 @bot.message_handler(state=MakingBetInfoState.diamonds)
 async def making_bet_diamonds(msg: types.Message):
-    await bot.delete_state(msg.from_user.id, msg.chat.id)
     try:
         int(msg.text)
     except ValueError:
         return
-    diamond_count = int(msg.text)
+    diamonds_count = int(msg.text)
+    async with bot.retrieve_data(msg.from_user.id, msg.chat.id) as data:
+        option = data['option']
+        predict_id = data['predict_id']
+    await bot.delete_state(msg.from_user.id, msg.chat.id)
 
+    option_title = await db_manager.get_value(
+        DB_FILE,
+        'EventPredicts',
+        'id',
+        predict_id,
+        f'option{option}'
+    )
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton('Подтвердить',
+                                          callback_data=f'confirm_bet:{predict_id}:{option}:{diamonds_count}')
+               )
+    markup.add(types.InlineKeyboardButton('Отмена', callback_data=f'select_predict:{predict_id}'))
+    await bot.send_message(
+        chat_id=msg.chat.id,
+        text='\n'.join(yml_local['confirm_bet']).format(option_title[0], diamonds_count),
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_bet:'))
+async def confirm_bet(call: types.CallbackQuery):
+    data = call.data.split(':')
+    predict_id = int(data[1])
+    option = int(data[2])
+    diamonds_count = int(data[3])
+    try:
+        user_old = await db_manager.get_value(
+            DB_FILE,
+            'PredictBets',
+            'predict_id',
+            predict_id,
+            '*',
+            sqlite3.Row
+        )
+        user_old = dict(user_old)[str(call.from_user.id)]
+        print(user_old)
+        try:
+            user_old_bet = user_old.split(':')[1]
+            user_old_option = user_old.split(':')[0]
+        except Exception as e:
+            user_old_bet = 0
+            user_old_option = 0
+        current_for_old_option = await db_manager.get_value(
+            DB_FILE,
+            'EventPredicts',
+            'id',
+            predict_id,
+            f'sum_option{user_old_option}'
+        ) if user_old_option != 0 else 0
+        current_for_old_option = current_for_old_option[0] if current_for_old_option != 0 else 0
+        current_for_old_option -= int(user_old_bet)
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE EventPredicts SET "sum_option{user_old_option}" = ? WHERE id = ?',
+            (current_for_old_option, predict_id)
+        )
+
+        current_for_this_option = await db_manager.get_value(
+            DB_FILE,
+            'EventPredicts',
+            'id',
+            predict_id,
+            f'sum_option{option}'
+        )
+        current_for_this_option = current_for_this_option[0]
+        current_for_this_option += diamonds_count
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE EventPredicts SET "sum_option{option}" = ? WHERE id = ?',
+            (current_for_this_option, predict_id)
+        )
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE PredictBets SET "{call.from_user.id}" = "{option}:{diamonds_count}" WHERE predict_id = ?',
+            (predict_id,)
+        )
+    except Exception as e:
+        print(e)
+        await bot.send_message(chat_id=call.message.chat.id, text='Не удалось сделать ставку. Попробуйте позже')
+    else:
+        await bot.send_message(
+            chat_id=call.message.chat.id,
+            text='Успешно. Новая ставка на это событие заменит предыдущую. Если хотите отменить ставку - поставьте 0 алмазов'
+        )
 
 
 async def main():
+    bot.add_custom_filter(async_telebot.asyncio_filters.StateFilter(bot))
     task1 = asyncio.create_task(bot.infinity_polling(timeout=None))
     task2 = asyncio.create_task(db_manager.init_db(DB_FILE))
     await task1
