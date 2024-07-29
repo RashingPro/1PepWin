@@ -197,6 +197,22 @@ async def making_bet_diamonds(msg: types.Message):
     except ValueError:
         return
     diamonds_count = int(msg.text)
+    user_balance = await db_manager.get_value(
+        DB_FILE,
+        'Users',
+        'tg_id',
+        msg.from_user.id,
+        'diamonds'
+    )
+    user_balance = user_balance[0]
+    if user_balance < diamonds_count:
+        await bot.send_message(
+            chat_id=msg.chat.id,
+            text=yml_local['not_enough_diamonds']
+        )
+        await cmd_menu(msg)
+        await bot.delete_state(msg.from_user.id, msg.chat.id)
+        return
     async with bot.retrieve_data(msg.from_user.id, msg.chat.id) as data:
         option = data['option']
         predict_id = data['predict_id']
@@ -257,7 +273,21 @@ async def confirm_bet(call: types.CallbackQuery):
             DB_FILE,
             f'UPDATE EventPredicts SET "sum_option{user_old_option}" = ? WHERE id = ?',
             (current_for_old_option, predict_id)
+        ) if current_for_old_option != 0 else ...
+
+        user_balance = await db_manager.get_value(
+            DB_FILE,
+            'Users',
+            'tg_id',
+            call.from_user.id,
+            'diamonds'
         )
+        user_balance = user_balance[0]
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE Users SET diamonds = ? WHERE tg_id = ?',
+            (user_balance + user_old_bet, call.from_user.id)
+        ) if user_old_bet != 0 else ...
 
         current_for_this_option = await db_manager.get_value(
             DB_FILE,
@@ -273,6 +303,22 @@ async def confirm_bet(call: types.CallbackQuery):
             f'UPDATE EventPredicts SET "sum_option{option}" = ? WHERE id = ?',
             (current_for_this_option, predict_id)
         )
+
+        user_balance = await db_manager.get_value(
+            DB_FILE,
+            'Users',
+            'tg_id',
+            call.from_user.id,
+            'diamonds'
+        )
+        user_balance = user_balance[0]
+
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE Users SET diamonds = ? WHERE tg_id = ?',
+            (user_balance - diamonds_count, call.from_user.id)
+        )
+
         await db_manager.execute(
             DB_FILE,
             f'UPDATE PredictBets SET "{call.from_user.id}" = "{option}:{diamonds_count}" WHERE predict_id = ?',
