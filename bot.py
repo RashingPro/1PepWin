@@ -178,7 +178,6 @@ async def start_making_bet(call: types.CallbackQuery):
     await bot.delete_message(msg.chat.id, msg.message_id)
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton('Назад', callback_data=f'select_predict:{predict_id}'))
-    # TODO: обработка стейтов
     await bot.set_state(user.id, MakingBetInfoState.diamonds, msg.chat.id)
     await bot.current_states.set_data(msg.chat.id, user.id, 'option', option)
     await bot.current_states.set_data(msg.chat.id, user.id, 'predict_id', predict_id)
@@ -243,6 +242,10 @@ async def confirm_bet(call: types.CallbackQuery):
     predict_id = int(data[1])
     option = int(data[2])
     diamonds_count = int(data[3])
+    await bot.delete_message(
+        chat_id=call.message.chat.id,
+        message_id=call.message.id
+    )
     try:
         user_old = await db_manager.get_value(
             DB_FILE,
@@ -253,9 +256,9 @@ async def confirm_bet(call: types.CallbackQuery):
             sqlite3.Row
         )
         user_old = dict(user_old)[str(call.from_user.id)]
-        if user_old is not None:
+        if user_old is not None: # отмена предыдущей ставки если она есть
             user_old_option = user_old.split(':')[0]
-            user_old_bet = user_old.split(':')[1]
+            user_old_bet = int(user_old.split(':')[1])
             current_for_old_option = await db_manager.get_value(
                 DB_FILE,
                 'EventPredicts',
@@ -263,11 +266,52 @@ async def confirm_bet(call: types.CallbackQuery):
                 predict_id,
                 f'sum_option{user_old_option}'
             )
+            current_for_old_option = current_for_old_option[0]
             await db_manager.execute(
                 DB_FILE,
                 f'UPDATE EventPredicts SET "sum_option{user_old_option}" = ? WHERE id = ?',
                 (current_for_old_option - user_old_bet, predict_id)
             )
+            user_balance = await db_manager.get_value(
+                DB_FILE,
+                'Users',
+                'tg_id',
+                call.from_user.id,
+                'diamonds'
+            )
+            user_balance = user_balance[0]
+            await db_manager.execute(
+                DB_FILE,
+                f'UPDATE Users SET diamonds = ? WHERE tg_id = ?',
+                (user_balance + user_old_bet, call.from_user.id)
+            )
+
+        current_for_new_option = await db_manager.get_value(
+            DB_FILE,
+            'EventPredicts',
+            'id',
+            predict_id,
+            f'sum_option{option}'
+        )
+        current_for_new_option = current_for_new_option[0]
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE EventPredicts SET sum_option{option} = ? WHERE id = ?',
+            (current_for_new_option + diamonds_count, predict_id)
+        )
+        user_balance = await db_manager.get_value(
+            DB_FILE,
+            'Users',
+            'tg_id',
+            call.from_user.id,
+            'diamonds'
+        )
+        user_balance = user_balance[0]
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE Users SET diamonds = ? WHERE tg_id = ?',
+            (user_balance - diamonds_count, call.from_user.id)
+        )
 
         await db_manager.execute(
             DB_FILE,
