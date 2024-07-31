@@ -91,7 +91,7 @@ async def cmd_events(call: types.Message | types.CallbackQuery):
     )
     event_list = [dict(_e) for _e in event_list]
     for event in event_list:
-        markup.add(types.InlineKeyboardButton(event['title'], callback_data=f'select_event:{event['id']}'))
+        markup.add(types.InlineKeyboardButton(event['title'], callback_data=f'select_event:{event["id"]}'))
     markup.add(types.InlineKeyboardButton('Назад', callback_data='menu'))
     await bot.send_message(
         chat_id=msg.chat.id,
@@ -111,7 +111,7 @@ async def select_event(call: types.CallbackQuery):
     event_predicts = [dict(_p) for _p in event_predicts]
     markup = types.InlineKeyboardMarkup()
     for predict in event_predicts:
-        markup.add(types.InlineKeyboardButton(predict['title'], callback_data=f'select_predict:{predict['id']}'))
+        markup.add(types.InlineKeyboardButton(predict['title'], callback_data=f'select_predict:{predict["id"]}'))
     markup.add(types.InlineKeyboardButton('Назад', callback_data='btn_events_for_bet'))
     await bot.send_message(
         chat_id=msg.chat.id,
@@ -149,13 +149,13 @@ async def select_predict(call: types.CallbackQuery):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(
         predict_info['option1'],
-        callback_data=f'start_making_bet:{predict_info['id']}:1')
+        callback_data=f'start_making_bet:{predict_info["id"]}:1')
     )
     markup.add(types.InlineKeyboardButton(
         predict_info['option2'],
-        callback_data=f'start_making_bet:{predict_info['id']}:2')
+        callback_data=f'start_making_bet:{predict_info["id"]}:2')
     )
-    markup.add(types.InlineKeyboardButton('Назад', callback_data=f'select_event:{predict_info['event_id']}'))
+    markup.add(types.InlineKeyboardButton('Назад', callback_data=f'select_event:{predict_info["event_id"]}'))
     await bot.send_message(
         chat_id=msg.chat.id,
         text=text,
@@ -392,11 +392,13 @@ async def my_bets(call: types.Message | types.CallbackQuery):
             'title'
         )
         event_title = event_title[0]
+        option = bets[i][str(user.id)].split(':')[0]
+        option_title = predict[f'option{option}']
         bets_txt += yml_local['your_bet_format'].format(
             i + 1,
             event_title,
             predict['title'],
-            predict[f'option{bets[i][str(user.id)].split(':')[0]}'],
+            option_title,
             bets[i][str(user.id)].split(':')[1]
         )
     if bets_txt == '':
