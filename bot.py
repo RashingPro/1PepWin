@@ -37,6 +37,7 @@ async def cmd_menu(call: types.Message | types.CallbackQuery):
     markup.add(types.InlineKeyboardButton(yml_local['btn_events_for_bet'], callback_data='btn_events_for_bet'))
     markup.add(types.InlineKeyboardButton(yml_local['btn_deposit'], callback_data='btn_deposit'))
     markup.add(types.InlineKeyboardButton(yml_local['btn_my_bets'], callback_data='btn_my_bets'))
+    markup.add(types.InlineKeyboardButton(yml_local['btn_support'], callback_data='btn_support'))
     user_balance = await db_manager.get_value(
         DB_FILE,
         'Users',
@@ -414,6 +415,18 @@ async def wcmd_admin(msg: types.Message):
     if msg.from_user.id != 1282559297:
         return
     await bot.send_message(int(msg.text.split()[1]), text='Я тебя вижу:)')
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'btn_support')
+@bot.message_handler(commands=['support'])
+async def support(call: types.Message | types.CallbackQuery):
+  if isinstance(call, types.Message):
+    msg = call
+    user = call.from_user
+  else:
+    msg = call.message
+    user = call.from_user
+    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.id)
 
 
 async def main():
