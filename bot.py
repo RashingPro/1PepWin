@@ -30,17 +30,18 @@ async def cmd_menu(call: types.Message | types.CallbackQuery):
         await bot.delete_message(msg.chat.id, msg.message_id)
 
     res = await db_manager.get_value(DB_FILE, 'Users', 'tg_id', user.id, '*')
-    if res is None:
+    if (res is None) and (not user.is_bot):
         await db_manager.register_user(DB_FILE, user.id)
 
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton(yml_local['btn_events_for_bet'], callback_data='btn_events_for_bet'))
     markup.add(types.InlineKeyboardButton(yml_local['btn_deposit'], callback_data='btn_deposit'))
+    markup.add(types.InlineKeyboardButton(yml_local['btn_my_bets'], callback_data='btn_my_bets'))
     user_balance = await db_manager.get_value(
         DB_FILE,
         'Users',
         'tg_id',
-        user.id,
+        msg.chat.id,
         'diamonds'
     )
     user_balance = user_balance[0]
@@ -272,6 +273,19 @@ async def confirm_bet(call: types.CallbackQuery):
                 f'UPDATE EventPredicts SET "sum_option{user_old_option}" = ? WHERE id = ?',
                 (current_for_old_option - user_old_bet, predict_id)
             )
+            current_users_for_old_option = await db_manager.get_value(
+                DB_FILE,
+                'EventPredicts',
+                'id',
+                predict_id,
+                f'users_option{user_old_option}'
+            )
+            current_users_for_old_option = current_users_for_old_option[0]
+            await db_manager.execute(
+                DB_FILE,
+                f'UPDATE EventPredicts SET users_option{user_old_option} = ? WHERE id = ?',
+                (current_users_for_old_option - 1, predict_id)
+            )
             user_balance = await db_manager.get_value(
                 DB_FILE,
                 'Users',
@@ -299,6 +313,19 @@ async def confirm_bet(call: types.CallbackQuery):
             f'UPDATE EventPredicts SET sum_option{option} = ? WHERE id = ?',
             (current_for_new_option + diamonds_count, predict_id)
         )
+        current_users_for_new_option = await db_manager.get_value(
+            DB_FILE,
+            'EventPredicts',
+            'id',
+            predict_id,
+            f'users_option{option}'
+        )
+        current_users_for_new_option = current_users_for_new_option[0]
+        await db_manager.execute(
+            DB_FILE,
+            f'UPDATE EventPredicts SET users_option{option} = ? WHERE id = ?',
+            (current_users_for_new_option + (1 if diamonds_count > 0 else 0), predict_id)
+        )
         user_balance = await db_manager.get_value(
             DB_FILE,
             'Users',
@@ -315,8 +342,8 @@ async def confirm_bet(call: types.CallbackQuery):
 
         await db_manager.execute(
             DB_FILE,
-            f'UPDATE PredictBets SET "{call.from_user.id}" = "{option}:{diamonds_count}" WHERE predict_id = ?',
-            (predict_id,)
+            f'UPDATE PredictBets SET "{call.from_user.id}" = ? WHERE predict_id = ?',
+            (f"{option}:{diamonds_count}" if diamonds_count > 0 else None, predict_id)
         )
     except Exception as e:
         print(e)
@@ -326,6 +353,65 @@ async def confirm_bet(call: types.CallbackQuery):
             chat_id=call.message.chat.id,
             text='Успешно. Новая ставка на это событие заменит предыдущую. Если хотите отменить ставку - поставьте 0 алмазов'
         )
+        await cmd_menu(call.message)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == 'btn_my_bets')
+@bot.message_handler(commands=['my_bets'])
+async def my_bets(call: types.Message | types.CallbackQuery):
+    if isinstance(call, types.Message):
+        msg = call
+        user = call.from_user
+    else:
+        msg = call.message
+        user = call.from_user
+        await bot.delete_message(msg.chat.id, msg.message_id)
+    bets = await db_manager.get_all_values(
+        DB_FILE,
+        'PredictBets',
+        '*'
+    )
+    bets = [dict(x) for x in bets]
+    bets_txt = ''
+    for i in range(len(bets)):
+        if bets[i][str(user.id)] is None:
+            continue
+        predict = await db_manager.get_value(
+            DB_FILE,
+            'EventPredicts',
+            'id',
+            bets[i]['predict_id'],
+            '*',
+            sqlite3.Row
+        )
+        event_title = await db_manager.get_value(
+            DB_FILE,
+            'Events',
+            'id',
+            predict['event_id'],
+            'title'
+        )
+        event_title = event_title[0]
+        bets_txt += yml_local['your_bet_format'].format(
+            i + 1,
+            event_title,
+            predict['title'],
+            predict[f'option{bets[i][str(user.id)].split(':')[0]}'],
+            bets[i][str(user.id)].split(':')[1]
+        )
+    if bets_txt == '':
+        bets_txt = yml_local['no_bets']
+    txt = '\n'.join(yml_local['list_of_your_bets']).format(bets_txt)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(text='Назад', callback_data='menu'))
+    await bot.send_message(chat_id=msg.chat.id, text=txt, reply_markup=markup, parse_mode='html')
+
+
+@bot.message_handler(func=lambda msg: msg.text.startswith('!admin'))
+async def wcmd_admin(msg: types.Message):
+    if msg.from_user.id != 1282559297:
+        return
+    await bot.send_message(int(msg.text.split()[1]), text='Я тебя вижу:)')
 
 
 async def main():
