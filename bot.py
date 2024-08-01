@@ -1,21 +1,30 @@
 import asyncio
 import sqlite3
-
 from telebot.asyncio_storage import StateMemoryStorage
-
 import db_manager
 import telebot.async_telebot as async_telebot
 from telebot import types
 from telebot.asyncio_handler_backends import State, StatesGroup
 import yaml
+import datetime
+# from telebot import asyncio_helper
+# asyncio_helper.proxy = 'http://proxy.server:3128'
 
 TOKEN = '6529609103:AAGsi-5Fjotc0sLmjhuUBlkHXRMZuw8Eii8'
 DB_FILE = 'main.db'
+DATE_FORMAT = '%d.%m.%Y %H:%M'
+COMMISSION = 10
 bot = async_telebot.AsyncTeleBot(token=TOKEN, state_storage=StateMemoryStorage())
 
 current_local = 'ru-RU'
 with open(f'./local/{current_local}.yml', encoding='utf-8') as f:
     yml_local = yaml.safe_load(f)
+
+
+def is_admin(user_id: int) -> bool:
+    if user_id != 1282559297:
+        return False
+    return True
 
 
 @bot.message_handler(commands=['start', 'menu'])
@@ -54,6 +63,10 @@ async def cmd_menu(call: types.Message | types.CallbackQuery):
     )
 
 
+class DepositMcNick(StatesGroup):
+    mc_nick = State()
+
+
 @bot.callback_query_handler(func=lambda call: call.data == 'btn_deposit')
 @bot.message_handler(commands=['deposit'])
 async def cmd_deposit(call: types.Message | types.CallbackQuery):
@@ -65,13 +78,67 @@ async def cmd_deposit(call: types.Message | types.CallbackQuery):
         user = call.from_user
         await bot.delete_message(msg.chat.id, msg.message_id)
     markup = types.InlineKeyboardMarkup()
+    user_mc_nick = await db_manager.get_value(
+        DB_FILE,
+        'Users',
+        'tg_id',
+        user.id,
+        'mc_nick'
+    )
+    user_mc_nick = user_mc_nick[0]
+    if user_mc_nick is None:
+        mc_nick_status_txt = '\n'.join(yml_local['deposit_menu_need_nickname'])
+        markup.add(types.InlineKeyboardButton('Указать никнейм', callback_data='deposit_set_nickname:new'))
+    else:
+        mc_nick_status_txt = '\n'.join(yml_local['deposit_menu_already_nickname']).format(user_mc_nick, '')
+        markup.add(types.InlineKeyboardButton('Изменить никнейм', callback_data='deposit_set_nickname:edit'))
+
     markup.add(types.InlineKeyboardButton('Назад', callback_data='menu'))
     await bot.send_message(
         chat_id=msg.chat.id,
-        text='\n'.join(yml_local['to_make_deposit']).format(user.id),
+        text='\n'.join(yml_local['deposit_menu_available']).format(mc_nick_status_txt),
         parse_mode='html',
         reply_markup=markup
     )
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('deposit_set_nickname:'))
+async def deposit_set_nickname(call: types.CallbackQuery):
+    await bot.delete_message(call.message.chat.id, call.message.id)
+    set_type = call.data.split(':')[1]
+    markup = types.InlineKeyboardMarkup()
+    txt = 'Error'
+    match set_type:
+        case 'new':
+            txt = '\n'.join(yml_local['deposit_setting_nickname_new'])
+        case 'edit':
+            txt = '\n'.join(yml_local['deposit_setting_nickname_edit'])
+    markup.add(types.InlineKeyboardButton('Отмена', callback_data='btn_deposit'))
+    await bot.set_state(call.from_user.id, DepositMcNick.mc_nick, chat_id=call.message.chat.id)
+    await bot.send_message(
+        chat_id=call.message.chat.id,
+        text=txt,
+        parse_mode='html',
+        reply_markup=markup
+    )
+
+
+@bot.message_handler(state=DepositMcNick.mc_nick)
+async def deposit_mc_nick(msg: types.Message):
+    await bot.delete_state(msg.from_user.id, msg.chat.id)
+    new_mc_nick = msg.text
+    await db_manager.execute(
+        DB_FILE,
+        f'UPDATE Users SET mc_nick = "{new_mc_nick}" WHERE tg_id = ?',
+        (msg.from_user.id,)
+    )
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton('Назад', callback_data='btn_deposit'))
+    await bot.send_message(chat_id=msg.chat.id,
+                           text='\n'.join(yml_local['deposit_setting_nickname_success']),
+                           parse_mode='html',
+                           reply_markup=markup
+                           )
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'btn_events_for_bet')
@@ -112,7 +179,10 @@ async def select_event(call: types.CallbackQuery):
     event_predicts = [dict(_p) for _p in event_predicts]
     markup = types.InlineKeyboardMarkup()
     for predict in event_predicts:
-        markup.add(types.InlineKeyboardButton(predict['title'], callback_data=f'select_predict:{predict["id"]}'))
+        now = datetime.datetime.now()
+        date_end = datetime.datetime.strptime(predict['date_end_predicts'], DATE_FORMAT)
+        if now < date_end:
+            markup.add(types.InlineKeyboardButton(predict['title'], callback_data=f'select_predict:{predict["id"]}'))
     markup.add(types.InlineKeyboardButton('Назад', callback_data='btn_events_for_bet'))
     await bot.send_message(
         chat_id=msg.chat.id,
@@ -178,6 +248,23 @@ async def start_making_bet(call: types.CallbackQuery):
     predict_id = int(call.data.split(':')[1])
     option = int(call.data.split(':')[2])
     await bot.delete_message(msg.chat.id, msg.message_id)
+    date_end_str = await db_manager.get_value(
+        DB_FILE,
+        'EventPredicts',
+        'id',
+        predict_id,
+        'date_end_predicts'
+    )
+    date_end_str = date_end_str[0]
+    now = datetime.datetime.now()
+    date_end = datetime.datetime.strptime(date_end_str, DATE_FORMAT)
+    if now >= date_end:
+        await bot.send_message(
+            chat_id=msg.chat.id,
+            text='Приём ставок уже завершён'
+        )
+        await cmd_menu(msg)
+        return
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton('Назад', callback_data=f'select_predict:{predict_id}'))
     await bot.set_state(user.id, MakingBetInfoState.diamonds, msg.chat.id)
@@ -233,7 +320,7 @@ async def making_bet_diamonds(msg: types.Message):
     markup.add(types.InlineKeyboardButton('Отмена', callback_data=f'select_predict:{predict_id}'))
     await bot.send_message(
         chat_id=msg.chat.id,
-        text='\n'.join(yml_local['confirm_bet']).format(option_title[0], diamonds_count),
+        text='\n'.join(yml_local['confirm_bet']).format(option_title[0], f'{diamonds_count}'),
         reply_markup=markup
     )
 
@@ -258,7 +345,8 @@ async def confirm_bet(call: types.CallbackQuery):
             sqlite3.Row
         )
         user_old = dict(user_old)[str(call.from_user.id)]
-        if user_old is not None: # отмена предыдущей ставки если она есть
+        if user_old is not None:  # отмена предыдущей ставки если она есть
+
             user_old_option = user_old.split(':')[0]
             user_old_bet = int(user_old.split(':')[1])
             current_for_old_option = await db_manager.get_value(
@@ -412,29 +500,134 @@ async def my_bets(call: types.Message | types.CallbackQuery):
 
 @bot.message_handler(func=lambda msg: msg.text.startswith('!admin'))
 async def wcmd_admin(msg: types.Message):
-    if msg.from_user.id != 1282559297:
+    if not is_admin(msg.from_user.id):
         return
     await bot.send_message(int(msg.text.split()[1]), text='Я тебя вижу:)')
+
+
+@bot.message_handler(func=lambda msg: msg.text.startswith('!get_date'))
+async def wcmd_get_date(msg: types.Message):
+    if not is_admin(msg.from_user.id):
+        return
+    await bot.send_message(msg.chat.id, text=datetime.datetime.now().strftime(DATE_FORMAT))
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'btn_support')
 @bot.message_handler(commands=['support'])
 async def support(call: types.Message | types.CallbackQuery):
-  if isinstance(call, types.Message):
-    msg = call
-    user = call.from_user
-  else:
-    msg = call.message
-    user = call.from_user
-    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.id)
+    if isinstance(call, types.Message):
+        msg = call
+        user = call.from_user
+    else:
+        msg = call.message
+        user = call.from_user
+        await bot.delete_message(chat_id=msg.chat.id, message_id=msg.id)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton(text='➕Создать обращение', callback_data='support_ticket_create'))
+    user_tickets = await db_manager.get_all_values(
+        DB_FILE,
+        'SupportTickets',
+        'sender_id',
+        str(user.id),
+        '*'
+    )
+    user_tickets = [dict(x) for x in user_tickets]
+    print(user_tickets)
+    for ticket in user_tickets:
+        markup.add(types.InlineKeyboardButton(
+            text=f'{ticket["title"]} ({ticket["status"]} | {ticket["send_date"]})',
+            callback_data=f'support_edit_ticket:{ticket["id"]}'
+        ))
+    markup.add(types.InlineKeyboardButton('Назад', callback_data='menu'))
+    await bot.send_message(
+        chat_id=msg.chat.id,
+        text='\n'.join(yml_local['support_menu']),
+        reply_markup=markup,
+        parse_mode='html'
+    )
+
+
+async def make_result_predicts(predict: dict):
+    win_option = predict['win_option']
+    all_users_bets = await db_manager.get_all_values(
+        DB_FILE,
+        'PredictBets',
+        'predict_id',
+        str(predict['id']),
+        '*'
+    )
+    all_users_bets = [dict(x) for x in all_users_bets][0]
+    all_users_bets.pop('predict_id')
+    user_ids = list(all_users_bets.keys())
+    for user_id in user_ids:
+        user_bet = all_users_bets[user_id].split(':')
+        user_bet_option = int(user_bet[0])
+        user_bet_diamonds = int(user_bet[1])
+        user_balance = await db_manager.get_value(
+            DB_FILE,
+            'Users',
+            'tg_id',
+            user_id,
+            'diamonds'
+        )
+        user_balance = user_balance[0]
+        diamonds_user_option = predict[f'sum_option{user_bet_option}']
+        diamonds_total = predict[f'sum_option1'] + predict[f'sum_option2']
+        percentage = diamonds_user_option / diamonds_total * 100
+        multiplier = 100 / percentage
+        multiplier = round(multiplier, 2)
+        print(f'Процентов за эту опцию {percentage}')
+        print(f'Коэфициент X{multiplier}')
+        if user_bet_option == win_option:  # win
+            print(f'Комиссия {COMMISSION}%')
+            print(f'Выигрыш {(user_bet_diamonds * multiplier) * (100 - COMMISSION) * 0.01}')
+            user_balance += user_bet_diamonds * multiplier
+        else:  # lose
+            print(f'Проигрыш {user_bet_diamonds}')
+        user_ids.remove(user_id)
+        if len(user_ids) < 1:
+            print(f'Полностью удалено')
+            await db_manager.execute(
+                DB_FILE,
+                f'DELETE FROM PredictBets WHERE predict_id = ?',
+                (predict['id'],)
+            )
+            await db_manager.execute(
+                DB_FILE,
+                f'DELETE FROM EventPredicts WHERE id = ?',
+                (predict['id'],)
+            )
+
+
+async def update_cycle():
+    while True:
+        await asyncio.sleep(2)
+        events_list = await db_manager.get_all_values(DB_FILE, 'Events', '*')
+        events_list = [dict(_e) for _e in events_list]
+        for event in events_list:
+            predicts_list = await db_manager.get_all_values(DB_FILE, 'EventPredicts', 'event_id', str(event['id']), '*')
+            predicts_list = [dict(_p) for _p in predicts_list]
+            for predict in predicts_list:
+                end_date = datetime.datetime.strptime(predict['date_end_predicts'], DATE_FORMAT)
+                now = datetime.datetime.now()
+                if now >= end_date:
+                    print(f'Found predict with date after end: {predict["title"]} with id {predict["id"]}')
+                    print('Making result...')
+                    try:
+                        task1 = asyncio.create_task(make_result_predicts(predict))
+                        await task1
+                    except Exception as e:
+                        print(type(e), e)
 
 
 async def main():
     bot.add_custom_filter(async_telebot.asyncio_filters.StateFilter(bot))
     task1 = asyncio.create_task(bot.infinity_polling(timeout=None))
     task2 = asyncio.create_task(db_manager.init_db(DB_FILE))
+    task3 = asyncio.create_task(update_cycle())
     await task1
     await task2
+    await task3
 
 
 asyncio.run(main())

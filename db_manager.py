@@ -7,6 +7,7 @@ async def init_db(file: str):
     c.execute('''
     CREATE TABLE IF NOT EXISTS Users (
     tg_id INTEGER PRIMARY KEY,
+    mc_nick TEXT,
     diamonds INTEGER NOT NULL
     )
     ''')
@@ -32,12 +33,24 @@ async def init_db(file: str):
     users_option1 INTEGER NOT NULL,
     users_option2 INTEGER NOT NULL,
     date TEXT NOT NULL,
-    date_end_predicts TEXT NOT NULL
+    date_end_predicts TEXT NOT NULL,
+    win_option INTEGER
     )
     ''')
     c.execute('''
     CREATE TABLE IF NOT EXISTS PredictBets (
     predict_id INTEGER PRIMARY KEY
+    )
+    ''')
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS SupportTickets (
+    id INTEGER PRIMARY KEY,
+    sender_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    send_date TEXT NOT NULL
     )
     ''')
     con.commit()
