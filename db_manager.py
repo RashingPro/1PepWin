@@ -107,5 +107,11 @@ async def get_all_values(file: str, table: str, primary_key: str, pkey_value: st
 
 
 async def register_user(file: str, tg_id: int):
-    await add_column(file, 'PredictBets', f'\"{tg_id}\"')
-    await add_value(file, 'Users', [tg_id, 0])
+    try:
+        await add_column(file, 'PredictBets', f'\"{tg_id}\"')
+    except:
+        ...
+    try:
+        await add_value(file, 'Users', [tg_id, None, 0])
+    except:
+        ...

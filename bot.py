@@ -7,14 +7,16 @@ from telebot import types
 from telebot.asyncio_handler_backends import State, StatesGroup
 import yaml
 import datetime
-# from telebot import asyncio_helper
+import random as rd
+from telebot import asyncio_helper
 # asyncio_helper.proxy = 'http://proxy.server:3128'
-
 
 TOKEN = '6529609103:AAGsi-5Fjotc0sLmjhuUBlkHXRMZuw8Eii8'
 DB_FILE = 'main.db'
 DATE_FORMAT = '%d.%m.%Y %H:%M'
 COMMISSION = 10
+ADMINS = [1282559297, 2032985740]
+BETS_INFO = [1282559297, 2032985740]
 bot = async_telebot.AsyncTeleBot(token=TOKEN, state_storage=StateMemoryStorage())
 
 current_local = 'ru-RU'
@@ -23,7 +25,7 @@ with open(f'./local/{current_local}.yml', encoding='utf-8') as f:
 
 
 def is_admin(user_id: int) -> bool:
-    if user_id != 1282559297:
+    if user_id not in ADMINS:
         return False
     return True
 
@@ -321,7 +323,7 @@ async def making_bet_diamonds(msg: types.Message):
     markup.add(types.InlineKeyboardButton('Отмена', callback_data=f'select_predict:{predict_id}'))
     await bot.send_message(
         chat_id=msg.chat.id,
-        text='\n'.join(yml_local['confirm_bet']).format(option_title[0], f'{diamonds_count}'),
+        text='\n'.join(yml_local['confirm_bet']).format(option_title[0], f'{diamonds_count}', COMMISSION),
         reply_markup=markup
     )
 
@@ -443,6 +445,43 @@ async def confirm_bet(call: types.CallbackQuery):
             chat_id=call.message.chat.id,
             text='Успешно. Новая ставка на это событие заменит предыдущую. Если хотите отменить ставку - поставьте 0 алмазов'
         )
+        mc_nick = await db_manager.get_value(
+            DB_FILE,
+            'Users',
+            'tg_id',
+            call.from_user.id,
+            'mc_nick'
+        )
+        predict = await db_manager.get_all_values(
+            DB_FILE,
+            'EventPredicts',
+            'id',
+            str(predict_id),
+            '*'
+        )
+        predict = dict(predict[0])
+        event = await db_manager.get_value(
+            DB_FILE,
+            'Events',
+            'id',
+            predict['event_id'],
+            'title'
+        )
+        event = event[0]
+        for bet_info_user in BETS_INFO:
+            if call.from_user.id == 1282559297:
+                continue
+            await bot.send_message(
+                chat_id=bet_info_user,
+                text='\n'.join(yml_local['new_bet_admin_info']).format(
+                    't.me/' + call.from_user.username,
+                    mc_nick[0],
+                    diamonds_count,
+                    f'{event} / {predict["title"]}',
+                    predict[f'option{option}']
+                ),
+                parse_mode='html'
+            )
         await cmd_menu(call.message)
 
 
@@ -511,6 +550,84 @@ async def wcmd_get_date(msg: types.Message):
     if not is_admin(msg.from_user.id):
         return
     await bot.send_message(msg.chat.id, text=datetime.datetime.now().strftime(DATE_FORMAT))
+
+
+@bot.message_handler(func=lambda msg: msg.text.startswith('!add_money'))
+async def wcmd_add_money(msg: types.Message):
+    try:
+        money = int(msg.text.split()[1])
+    except:
+        return
+    user_balance = await db_manager.get_value(
+        DB_FILE,
+        'Users',
+        'tg_id',
+        msg.chat.id,
+        'diamonds'
+    )
+    user_balance = user_balance[0] + money
+    await db_manager.execute(
+            DB_FILE,
+            f'UPDATE Users SET diamonds = ? WHERE tg_id = ?',
+            (user_balance, msg.from_user.id)
+    )
+
+
+@bot.message_handler(func=lambda msg: msg.text.startswith('!my_tg_id'))
+async def wcmd_my_tg_id(msg: types.Message):
+    await bot.send_message(chat_id=msg.chat.id, text=str(msg.from_user.id))
+
+
+@bot.message_handler(func=lambda msg: msg.text.startswith('!add_event'))
+async def wcmd_add_event(msg: types.Message):
+    if not is_admin(msg.from_user.id):
+        return
+    args = msg.text.split()
+    if len(args) - 1 < 2:
+        await bot.send_message(
+            chat_id=msg.chat.id,
+            text=yml_local['wrong_args']
+        )
+    event_id = args[1]
+    title = ' '.join(args[2:])
+    try:
+        await db_manager.add_value(
+            DB_FILE,
+            'Events',
+            [event_id, title]
+        )
+    except Exception as e:
+        code = rd.randint(1, 1000)
+        print(f'Exception: {e}. Values: {event_id};{title}. Error ID: {code}')
+        await bot.send_message(
+            chat_id=msg.chat.id,
+            text=f'Произошла ошибка. Обратитесь к разработчику с ID ошибки: {code}'
+        )
+    else:
+        await bot.send_message(
+            chat_id=msg.chat.id,
+            text=f'Успешно добавлен ивент {title} с ID {event_id}'
+        )
+
+
+@bot.message_handler(func=lambda msg: msg.text.startswith('!add_prediction')) #
+async def wcmd_add_prediction(msg: types.Message):
+    if not is_admin(msg.from_user.id):
+        return
+
+
+@bot.message_handler(func=lambda msg: msg.text.startswith('!set_bot_state'))
+async def wcmd_set_bot_state(msg: types.Message):
+    if not is_admin(msg.from_user.id):
+        return
+    state = msg.text.split()[1]
+    match state:
+        case 'enabled':
+            ...
+        case 'disabled':
+            ...
+        case _:
+            await bot.send_message(chat_id=msg.chat.id, text=yml_local['wrong_args'])
 
 
 @bot.callback_query_handler(func=lambda call: call.data == 'btn_support')
