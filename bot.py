@@ -11,7 +11,7 @@ import random as rd
 from telebot import asyncio_helper
 # asyncio_helper.proxy = 'http://proxy.server:3128'
 
-TOKEN = '6529609103:AAGsi-5Fjotc0sLmjhuUBlkHXRMZuw8Eii8'
+TOKEN = 'token_here'
 DB_FILE = 'main.db'
 DATE_FORMAT = '%d.%m.%Y %H:%M'
 COMMISSION = 10
